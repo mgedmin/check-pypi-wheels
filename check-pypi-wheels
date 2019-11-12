@@ -10,11 +10,11 @@ import json
 import logging
 import re
 from collections import defaultdict
-from typing import Dict, List, NamedTuple, Optional, Set, Union
+from typing import Dict, Iterable, List, NamedTuple, Optional, Set, Union
 
 import requests
 
-__version__ = '0.1.0.dev0'
+__version__ = '0.2.0.dev0'
 __author__ = 'Marius Gedminas <marius@gedmin.as>'
 
 
@@ -108,9 +108,27 @@ class WheelMatrix:
             if wheel.python_tag == python_tag
         )
 
+    def filter(self, name: str, python_tag: str) -> Iterable[WheelInfo]:
+        return (
+            wheel
+            for wheel in self.available.get(name, ())
+            if wheel.python_tag == python_tag
+        )
+
 
 def pretty_python_tag(python_tag: str) -> str:
-    return re.sub(r"cp(\d)(\d+)", r"\1.\2", python_tag)
+    return re.sub(r"^cp(\d)(\d+)$", r"\1.\2", python_tag)
+
+
+def platform_to_os(platform_tag: str) -> str:
+    for os, rx in [
+        ("lin", r"^manylinux"),
+        ("mac", r"^macosx"),
+        ("win", r"^win"),
+    ]:
+        if re.match(rx, platform_tag):
+            return os
+    return platform_tag
 
 
 def compute_column_widths(table: List[List[str]]) -> List[int]:
@@ -127,7 +145,7 @@ def print_table(table: List[List[str]]) -> None:
         buf = []
         for cell, width in zip(row, widths):
             buf.append(cell.ljust(width))
-        print(' '.join(buf))
+        print("  ".join(buf))
 
 
 def matrix_as_table(matrix: WheelMatrix) -> List[List[str]]:
@@ -137,11 +155,18 @@ def matrix_as_table(matrix: WheelMatrix) -> List[List[str]]:
     table = []
     table.append([''] + [pretty_python_tag(s) for s in columns])
     for name in names:
-        table.append(
-            [name] + [
-                str(matrix.count(name, python_tag=s))
-                for s in columns
-            ])
+        row = [name]
+        for python_tag in columns:
+            wheels = matrix.filter(name, python_tag=python_tag)
+            oses = {platform_to_os(wheel.platform_tag) for wheel in wheels}
+            cell = []
+            for os in "lin", "mac", "win":
+                if os in oses:
+                    cell.append(os.title())
+                else:
+                    cell.append(" - ")
+            row.append(" ".join(cell))
+        table.append(row)
     return table
 
 
