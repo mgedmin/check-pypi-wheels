@@ -14,7 +14,7 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Set, Union
 
 import requests
 
-__version__ = '0.3.0.dev0'
+__version__ = '0.4.0.dev0'
 __author__ = 'Marius Gedminas <marius@gedmin.as>'
 
 
@@ -150,7 +150,7 @@ def print_table(
         buf = []
         for cell, width, alignment in zip(row, widths, alignments):
             buf.append(format(cell, f"{alignment}{width}"))
-        print("  ".join(buf))
+        print("|", " | ".join(buf), "|")
 
 
 def add_underlines(table: List[List[str]]) -> List[List[str]]:
@@ -200,8 +200,8 @@ def matrix_as_table(matrix: WheelMatrix) -> List[List[str]]:
                 elif oses[os] > 0:
                     cell.append(os[:os_width].lower())
                 else:
-                    cell.append("-".center(os_width))
-            row.append(" ".join(cell))
+                    cell.append("-" * os_width)
+            row.append("".join(cell))
         table.append(row)
     return table
 
