@@ -1,0 +1,168 @@
+#!/usr/bin/python3
+"""
+Check what wheels are available for the latest releases of a set of packages.
+
+Created to make my life easier while working on
+https://github.com/zopefoundation/meta/issues/11
+"""
+
+import json
+import logging
+import re
+from collections import defaultdict
+from typing import Dict, List, NamedTuple, Optional, Set, Union
+
+import requests
+
+__version__ = '0.1.0.dev0'
+__author__ = 'Marius Gedminas <marius@gedmin.as>'
+
+
+log = logging.getLogger('check-pypi-wheels')
+
+
+# Configuration (hardcoded for now)
+
+PACKAGES = [
+    'BTrees',
+    'persistent',
+    'zodbpickle',
+    'zope.container',
+    'zope.hookable',
+    'zope.i18nmessageid',
+    'zope.index',
+    'zope.interface',
+    'zope.proxy',
+    'zope.security',
+]
+
+
+def pretty_json(data: Union[Dict, List]) -> str:
+    return json.dumps(data, sort_keys=True, indent=2)
+
+
+def get_available_wheels_for(
+    package_name: str,
+    session: requests.Session = None,
+) -> List[str]:
+    if session is None:
+        session = requests.Session()
+    url = f"https://pypi.org/pypi/{package_name}/json"
+    info = session.get(url).json()
+    latest_version = info['info']['version']
+    log.debug("Last release of %s is %s", package_name, latest_version)
+    files = info['releases'][latest_version]
+    return [f['filename'] for f in files if f['packagetype'] == 'bdist_wheel']
+
+
+class WheelInfo(NamedTuple):
+    python_tag: str
+    abi_tag: str
+    platform_tag: str
+
+
+def parse_wheel_filename(filename: str) -> WheelInfo:
+    # https://www.python.org/dev/peps/pep-0427/#file-name-convention:
+    # The wheel filename is {distribution}-{version}(-{build tag})?-{python
+    # tag}-{abi tag}-{platform tag}.whl.
+    assert filename.endswith('.whl')
+    python_tag, abi_tag, platform_tag = filename[:-len('.whl')].split('-')[-3:]
+    return WheelInfo(python_tag, abi_tag, platform_tag)
+
+
+def set_up_logging(level: int = logging.INFO) -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter('[%(name)s] %(message)s'))
+    logging.getLogger().addHandler(handler)
+    logging.getLogger().setLevel(level)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+
+
+class WheelMatrix:
+
+    def __init__(self) -> None:
+        self.python_tags: Set[str] = set()
+        self.abi_tags: Set[str] = set()
+        self.platform_tags: Set[str] = set()
+        self.available: Dict[str, Set[WheelInfo]] = defaultdict(set)
+
+    def add(self, name: str, wheel: Optional[WheelInfo] = None) -> None:
+        if not wheel:
+            self.available[name]  # make sure it exists
+            return
+        self.python_tags.add(wheel.python_tag)
+        self.abi_tags.add(wheel.abi_tag)
+        self.platform_tags.add(wheel.platform_tag)
+        self.available[name].add(wheel)
+
+    def has_any(self, name: str, python_tag: str) -> bool:
+        return any(
+            wheel.python_tag == python_tag
+            for wheel in self.available.get(name, ())
+        )
+
+    def count(self, name: str, python_tag: str) -> int:
+        return sum(
+            1
+            for wheel in self.available.get(name, ())
+            if wheel.python_tag == python_tag
+        )
+
+
+def pretty_python_tag(python_tag: str) -> str:
+    return re.sub(r"cp(\d)(\d+)", r"\1.\2", python_tag)
+
+
+def compute_column_widths(table: List[List[str]]) -> List[int]:
+    max_width = [0] * len(table[0])
+    for row in table:
+        for n, cell in enumerate(row):
+            max_width[n] = max(max_width[n], len(cell))
+    return max_width
+
+
+def print_table(table: List[List[str]]) -> None:
+    widths = compute_column_widths(table)
+    for row in table:
+        buf = []
+        for cell, width in zip(row, widths):
+            buf.append(cell.ljust(width))
+        print(' '.join(buf))
+
+
+def matrix_as_table(matrix: WheelMatrix) -> List[List[str]]:
+    names = sorted(matrix.available)
+    columns = sorted(matrix.python_tags)
+
+    table = []
+    table.append([''] + [pretty_python_tag(s) for s in columns])
+    for name in names:
+        table.append(
+            [name] + [
+                str(matrix.count(name, python_tag=s))
+                for s in columns
+            ])
+    return table
+
+
+def print_matrix(matrix: WheelMatrix) -> None:
+    table = matrix_as_table(matrix)
+    print_table(table)
+
+
+def main() -> None:
+    set_up_logging()
+    session = requests.Session()
+    matrix = WheelMatrix()
+    for package_name in PACKAGES:
+        wheels = get_available_wheels_for(package_name, session=session)
+        matrix.add(package_name)
+        for filename in wheels:
+            wheel = parse_wheel_filename(filename)
+            matrix.add(package_name, wheel)
+
+    print_matrix(matrix)
+
+
+if __name__ == "__main__":
+    main()
