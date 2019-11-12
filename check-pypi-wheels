@@ -9,12 +9,12 @@ https://github.com/zopefoundation/meta/issues/11
 import json
 import logging
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Dict, Iterable, List, NamedTuple, Optional, Set, Union
 
 import requests
 
-__version__ = '0.2.0.dev0'
+__version__ = '0.3.0.dev0'
 __author__ = 'Marius Gedminas <marius@gedmin.as>'
 
 
@@ -139,18 +139,32 @@ def compute_column_widths(table: List[List[str]]) -> List[int]:
     return max_width
 
 
-def print_table(table: List[List[str]]) -> None:
+def print_table(
+    table: List[List[str]],
+    alignments: Optional[List[str]] = None,
+) -> None:
     widths = compute_column_widths(table)
+    if alignments is None:
+        alignments = ["<"] * len(widths)
     for row in table:
         buf = []
-        for cell, width in zip(row, widths):
-            buf.append(cell.ljust(width))
+        for cell, width, alignment in zip(row, widths, alignments):
+            buf.append(format(cell, f"{alignment}{width}"))
         print("  ".join(buf))
+
+
+def add_underlines(table: List[List[str]]) -> List[List[str]]:
+    widths = compute_column_widths(table)
+    return table[:1] + [[
+        '-' * width for width in widths
+    ]] + table[1:]
 
 
 def matrix_as_table(matrix: WheelMatrix) -> List[List[str]]:
     names = sorted(matrix.available)
     columns = sorted(matrix.python_tags)
+
+    os_width = 3
 
     table = []
     table.append([''] + [pretty_python_tag(s) for s in columns])
@@ -158,13 +172,35 @@ def matrix_as_table(matrix: WheelMatrix) -> List[List[str]]:
         row = [name]
         for python_tag in columns:
             wheels = matrix.filter(name, python_tag=python_tag)
-            oses = {platform_to_os(wheel.platform_tag) for wheel in wheels}
+            oses = Counter(
+                platform_to_os(wheel.platform_tag) for wheel in wheels)
+
+            expected = {
+                'mac': 1,
+                'win': 2,   # 32-bit and 64-bit
+                'lin': 2,   # 32-bit and 64-bit
+            }
+
+            # Note: Linux is complicated.  We may have manylinux1 or
+            # manylinux2010 wheels, or both.
+            if (any(w.platform_tag.startswith('manylinux1_') for w in wheels)
+                    and any(w.platform_tag.startswith('manylinux2010_')
+                            for w in wheels)):
+                expected['lin'] *= 2
+
+            # cp27 wheels should have cp27m and cp27mu variants; this has been
+            # unified in Python 3.3 (and we don't care about 3.0--3.2).
+            if python_tag == 'cp27':
+                expected['lin'] *= 2
+
             cell = []
             for os in "lin", "mac", "win":
-                if os in oses:
-                    cell.append(os.title())
+                if oses[os] >= expected[os]:
+                    cell.append(os[:os_width].title())
+                elif oses[os] > 0:
+                    cell.append(os[:os_width].lower())
                 else:
-                    cell.append(" - ")
+                    cell.append("-".center(os_width))
             row.append(" ".join(cell))
         table.append(row)
     return table
@@ -172,7 +208,9 @@ def matrix_as_table(matrix: WheelMatrix) -> List[List[str]]:
 
 def print_matrix(matrix: WheelMatrix) -> None:
     table = matrix_as_table(matrix)
-    print_table(table)
+    alignments = ['<'] + ['^'] * len(table[0])
+    table = add_underlines(table)
+    print_table(table, alignments=alignments)
 
 
 def main() -> None:
